@@ -28,6 +28,6 @@ The app asks for the Remote UI admin password and stores it in Keychain for that
 
 ## Maintenance actions
 
-Maintenance actions post the captured Remote UI forms in `EndpointMap` (`docs/captures/remote-ui-actions.md`). Power Off shows energy/utility status; this G3010 firmware has no power-off CGI. Auto Power writes the power-save schedule. Quiet Settings restores silent mode off. Remaining Ink Notification resets the ink counter. Custom Settings reads device info.
+Maintenance actions post the captured Remote UI forms in `EndpointMap` (`docs/captures/remote-ui-actions.md`). Power Off and Custom Settings are unsupported via CGI, so those actions open Remote UI in Safari. Auto Power writes the power-save schedule. Quiet Settings posts silent mode on. Remaining Ink Notification resets the ink counter.
 
 **Open Remote UI in Safari** opens `http://<printer-host>/` with `NSWorkspace` (the printer’s Remote UI home page) so the action can be run there.

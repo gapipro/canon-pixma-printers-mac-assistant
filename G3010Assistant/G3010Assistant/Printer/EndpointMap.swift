@@ -13,11 +13,11 @@ struct ActionEndpoint: Equatable {
 enum EndpointMap {
     /// Captured from the G3010 Remote UI. `bodyTemplate` omits `SBID`; `RemoteUISession` appends it.
     /// Job-kick rows use `RW_OK`. `perform` also accepts `RW_POLLING` and rejects `RW_NG`.
-    /// Quiet mode posts `SILENT_MODE=OFF` (restore). A later UI can offer ON/OFF; OFF is the safer default.
+    /// Quiet mode posts `SILENT_MODE=ON` (reduce operating noise).
     /// Ink notification resets the counter (`INK_CNT_RESET=SET`).
     /// Auto power writes the power-save schedule. A live SET returns `RESULT` `RD_PAGE_UT`.
-    /// Power Off only reads `/rui/ut_data.cgi` (energy/utility status). This firmware has no power-off CGI.
-    /// Custom settings reads `/rui/machininfo_data.cgi` (`GETINFO=0`) as a view/sync, not a write.
+    /// Power Off and Custom Settings are omitted. This firmware has no CGI for those actions.
+    /// `endpoint(for:)` returns nil, and ActionFlow uses `.endpointMissing` to open Remote UI in Safari.
     private static let table: [AssistantAction: ActionEndpoint] = [
         .cleaning: ActionEndpoint(
             kind: .remoteUIForm,
@@ -75,13 +75,6 @@ enum EndpointMap {
             bodyTemplate: "",
             successContains: "RW_OK"
         ),
-        .powerOff: ActionEndpoint(
-            kind: .remoteUIForm,
-            path: "/rui/ut_data.cgi",
-            method: "POST",
-            bodyTemplate: "GETINFO=0",
-            successContains: "RD_PAGE_UT"
-        ),
         .autoPower: ActionEndpoint(
             kind: .remoteUIForm,
             path: "/rui/ut_data.cgi",
@@ -93,15 +86,8 @@ enum EndpointMap {
             kind: .remoteUIForm,
             path: "/rui/silent_mode.cgi",
             method: "POST",
-            bodyTemplate: "SILENT_MODE=OFF",
+            bodyTemplate: "SILENT_MODE=ON",
             successContains: "RW_OK"
-        ),
-        .customSettings: ActionEndpoint(
-            kind: .remoteUIForm,
-            path: "/rui/machininfo_data.cgi",
-            method: "POST",
-            bodyTemplate: "GETINFO=0",
-            successContains: "RD_PAGE_HARD"
         ),
     ]
 

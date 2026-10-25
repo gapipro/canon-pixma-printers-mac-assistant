@@ -12,15 +12,17 @@ final class EndpointMapTests: XCTestCase {
             .inkNotificationSettings: ("/rui/detect_ink_end.cgi", "SETINFO=0&INK_CNT_RESET=SET", "RW_OK"),
             .bottomPlateCleaning: ("/rui/ut_platen_cln.cgi", "", "RW_OK"),
             .rollerCleaning: ("/rui/ut_roller_mf_cln.cgi", "", "RW_OK"),
-            .powerOff: ("/rui/ut_data.cgi", "GETINFO=0", "RD_PAGE_UT"),
             .autoPower: ("/rui/ut_data.cgi", "SETINFO=0&POWER_SAVE_OFF=ON&POWER_SAVE_TIME=15", "RD_PAGE_UT"),
-            .quietSettings: ("/rui/silent_mode.cgi", "SILENT_MODE=OFF", "RW_OK"),
-            .customSettings: ("/rui/machininfo_data.cgi", "GETINFO=0", "RD_PAGE_HARD"),
+            .quietSettings: ("/rui/silent_mode.cgi", "SILENT_MODE=ON", "RW_OK"),
         ]
 
         XCTAssertEqual(AssistantAction.allCases.count, 12)
-        XCTAssertEqual(Set(expected.keys), Set(AssistantAction.allCases))
-        for action in AssistantAction.allCases {
+        XCTAssertNil(EndpointMap.endpoint(for: .powerOff))
+        XCTAssertNil(EndpointMap.endpoint(for: .customSettings))
+        let mapped = AssistantAction.allCases.filter { EndpointMap.endpoint(for: $0) != nil }
+        XCTAssertEqual(mapped.count, 10)
+        XCTAssertEqual(Set(expected.keys), Set(mapped))
+        for action in mapped {
             let endpoint = EndpointMap.endpoint(for: action)
             let row = expected[action]
             XCTAssertNotNil(endpoint, action.rawValue)
