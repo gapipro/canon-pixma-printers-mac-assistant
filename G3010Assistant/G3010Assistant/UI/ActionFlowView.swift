@@ -36,7 +36,7 @@ struct ActionFlowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     if case .endpointMissing = error {
-                        Button("Open Remote UI") {
+                        Button("Open Remote UI in Safari") {
                             model.openRemoteUI()
                         }
                     }

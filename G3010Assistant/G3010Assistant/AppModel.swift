@@ -16,6 +16,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var statusError: String?
     @Published private(set) var isLoadingStatus = false
 
+    /// Last selected printer host. Restored when discovery or a manual add lists this host again.
+    @AppStorage("lastPrinterHost") private var lastPrinterHost = ""
+
     private let browser: any PrinterBrowsing
     private let liveBrowser: PrinterBrowser?
     private var printerSubscription: AnyCancellable?
@@ -34,8 +37,10 @@ final class AppModel: ObservableObject {
         let browser = PreviewPrinterBrowser(printers: previewPrinters)
         self.browser = browser
         self.liveBrowser = nil
-        self.selectedPrinter = previewPrinters.first
         bind(browser)
+        if selectedPrinter == nil {
+            selectedPrinter = previewPrinters.first
+        }
     }
 
     func startBrowsing() {
@@ -54,6 +59,7 @@ final class AppModel: ObservableObject {
     }
 
     func select(_ printer: PrinterDevice) {
+        lastPrinterHost = printer.host
         selectedPrinter = printer
         printerStatus = nil
         statusError = nil
@@ -176,11 +182,30 @@ final class AppModel: ObservableObject {
     }
 
     private func bind<B: PrinterBrowsing & ObservableObject>(_ browser: B) {
-        printers = browser.printers
+        applyPrinters(browser.printers)
         printerSubscription = browser.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in
-                self?.printers = browser.printers
+                self?.applyPrinters(browser.printers)
             }
         }
+    }
+
+    /// `objectWillChange` runs before `@Published` updates, so callers read `browser.printers` on the next turn.
+    private func applyPrinters(_ printers: [PrinterDevice]) {
+        self.printers = printers
+        restoreLastPrinterIfNeeded()
+    }
+
+    /// Selects the stored host once it shows up. A later resolve of that same host updates the name without reconnecting.
+    private func restoreLastPrinterIfNeeded() {
+        let host = lastPrinterHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, let match = printers.first(where: { $0.host == host }) else { return }
+        if let selected = selectedPrinter {
+            if selected.host == host, selected != match {
+                selectedPrinter = match
+            }
+            return
+        }
+        select(match)
     }
 }
