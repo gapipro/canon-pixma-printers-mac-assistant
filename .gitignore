@@ -7,10 +7,9 @@ build/
 *.swp
 *~
 
-# Local capture noise / secrets
-docs/captures/*.pcap*
-docs/captures/*password*
-docs/captures/*cookie*
+# Local capture / design notes (purged from history; keep off git)
+docs/captures/
+docs/superpowers/
 
 # Canon Windows installer (never publish)
 pat_-win-*.exe
