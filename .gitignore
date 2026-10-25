@@ -1,0 +1,8 @@
+.DS_Store
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/
+.idea/
+docs/captures/*.pcap*
+docs/captures/*password*
