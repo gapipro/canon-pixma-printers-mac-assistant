@@ -2,9 +2,6 @@
 
 Native macOS maintenance app for Canon PIXMA ink-tank printers over Wi‑Fi (built and tested with **G3010**).
 
-Does **not** use or decompile Canon Windows software. Protocol notes informed by
-[pixma-rs](https://github.com/pdrgds/pixma-rs) (MIT OR Apache-2.0) and public Remote UI / CUPS behaviour.
-
 ![G3010 Assistant main window](docs/images/app-main.png)
 
 ## Features
@@ -24,7 +21,6 @@ Does **not** use or decompile Canon Windows software. Protocol notes informed by
   - Custom Settings
 - **CUPS / Gutenprint path** for cleaning, nozzle check, and head alignment when a matching queue exists (no Remote UI password needed)
 - **Printer status** view from Remote UI
-- Original icons (not Canon artwork)
 
 ## Requirements
 
@@ -55,8 +51,6 @@ On many G3010 printers the factory Remote UI password is the **serial number**. 
 
 ## Notes
 
-- Power Off sends a CHMP PowerOff to the printer; the connection drop after shutdown is treated as success.
-- Protocol capture notes for Remote UI forms live under `docs/captures/`.
 - Not affiliated with Canon. PIXMA and related names are trademarks of their owners.
 
 ## License
