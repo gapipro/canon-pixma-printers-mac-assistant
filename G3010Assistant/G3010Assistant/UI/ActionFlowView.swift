@@ -7,7 +7,7 @@ struct ActionFlowView: View {
 
     @State private var phase: Phase = .waiting
     @State private var showInkWarning = false
-    @State private var showFlushConfirm = false
+    @State private var showSecondConfirm = false
     @State private var didStart = false
 
     var body: some View {
@@ -56,11 +56,11 @@ struct ActionFlowView: View {
         } message: {
             Text(action.subtitle)
         }
-        .alert("Run Ink Flush?", isPresented: $showFlushConfirm) {
+        .alert("Run \(action.title)?", isPresented: $showSecondConfirm) {
             Button("Continue", action: run)
             Button("Cancel", role: .cancel) { dismiss() }
         } message: {
-            Text("Ink Flush fills the ink tubes and print head. This uses a large amount of ink.")
+            Text(secondConfirmMessage)
         }
     }
 
@@ -78,10 +78,22 @@ struct ActionFlowView: View {
     }
 
     private func continueAfterInkWarning() {
-        if action == .inkFlush {
-            showFlushConfirm = true
-        } else {
+        switch action {
+        case .deepCleaning, .inkFlush:
+            showSecondConfirm = true
+        default:
             run()
+        }
+    }
+
+    private var secondConfirmMessage: String {
+        switch action {
+        case .inkFlush:
+            return "Ink Flush fills the ink tubes and print head. This uses a large amount of ink."
+        case .deepCleaning:
+            return "Deep Cleaning uses a large amount of ink to unclog nozzles."
+        default:
+            return action.subtitle
         }
     }
 
