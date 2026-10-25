@@ -12,6 +12,22 @@ enum CHMPXML {
         return Data(xml.utf8)
     }
 
+    /// Windows IJ Assistant `Send_PowerOff` body (device service).
+    static func powerOff() -> Data {
+        let xml = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <cmd xmlns:ivec="http://www.canon.com/ns/cmd/2008/07/common/"><ivec:contents><ivec:operation>PowerOff</ivec:operation><ivec:param_set servicetype="device"></ivec:param_set></ivec:contents></cmd>
+        """
+        return Data(xml.utf8)
+    }
+
+    static func parsePowerOffResponse(_ data: Data) throws {
+        let text = String(data: data, encoding: .utf8) ?? ""
+        guard text.contains("PowerOffResponse") else {
+            throw AppError.parse("missing PowerOffResponse")
+        }
+    }
+
     static func parseGetStatusResponse(_ data: Data) throws -> PrinterStatus {
         let text = String(data: data, encoding: .utf8) ?? ""
         guard text.contains("GetStatusResponse") else {

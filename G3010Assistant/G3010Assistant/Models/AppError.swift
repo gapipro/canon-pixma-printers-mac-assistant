@@ -8,6 +8,8 @@ enum AppError: LocalizedError, Equatable {
     case http(Int, String)
     case parse(String)
     case cancelled
+    case cupsQueueMissing
+    case cupsFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,8 @@ enum AppError: LocalizedError, Equatable {
         case .http(let c, let b): return "HTTP \(c): \(b)"
         case .parse(let m): return "Could not parse printer response: \(m)"
         case .cancelled: return "Cancelled."
+        case .cupsQueueMissing: return "No local Canon G-series CUPS queue found."
+        case .cupsFailed(let m): return "CUPS command failed: \(m)"
         }
     }
 }

@@ -5,10 +5,10 @@ struct ActionFlowView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var phase: Phase = .waiting
+    @State private var options = ActionOptions()
+    @State private var phase: Phase = .configure
     @State private var showInkWarning = false
     @State private var showSecondConfirm = false
-    @State private var didStart = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -17,10 +17,18 @@ struct ActionFlowView: View {
                 .fontWeight(.semibold)
 
             switch phase {
-            case .waiting:
-                Text(action.subtitle)
-                    .foregroundStyle(.secondary)
-                Button("Cancel", role: .cancel) { dismiss() }
+            case .configure:
+                ScrollView {
+                    ActionOptionsForm(action: action, options: $options)
+                }
+                HStack {
+                    Button("Cancel", role: .cancel) { dismiss() }
+                    Spacer()
+                    Button(executeTitle) {
+                        requestExecute()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
             case .running:
                 HStack(spacing: 12) {
                     ProgressView()
@@ -47,31 +55,34 @@ struct ActionFlowView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 440, minHeight: 180, alignment: .topLeading)
+        .frame(minWidth: 480, minHeight: 260, alignment: .topLeading)
         .interactiveDismissDisabled(phase == .running)
-        .onAppear(perform: startIfNeeded)
         .alert("This uses a large amount of ink. Continue?", isPresented: $showInkWarning) {
             Button("Continue", action: continueAfterInkWarning)
-            Button("Cancel", role: .cancel) { dismiss() }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text(action.subtitle)
         }
         .alert("Run \(action.title)?", isPresented: $showSecondConfirm) {
             Button("Continue", action: run)
-            Button("Cancel", role: .cancel) { dismiss() }
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text(secondConfirmMessage)
         }
     }
 
-    private func startIfNeeded() {
-        guard !didStart else { return }
-        didStart = true
+    private var executeTitle: String {
+        switch action {
+        case .quietSettings, .autoPower, .customSettings, .inkNotificationSettings:
+            return "Apply"
+        default:
+            return "Execute"
+        }
+    }
+
+    private func requestExecute() {
         if action.isInkHeavy {
-            Task { @MainActor in
-                guard phase == .waiting else { return }
-                showInkWarning = true
-            }
+            showInkWarning = true
         } else {
             run()
         }
@@ -101,7 +112,7 @@ struct ActionFlowView: View {
         phase = .running
         Task {
             do {
-                try await model.perform(action)
+                try await model.perform(action, options: options)
                 phase = .succeeded
             } catch let error as AppError {
                 if error == .authFailed {
@@ -116,7 +127,7 @@ struct ActionFlowView: View {
     }
 
     private enum Phase: Equatable {
-        case waiting
+        case configure
         case running
         case succeeded
         case failed(AppError)
@@ -124,5 +135,5 @@ struct ActionFlowView: View {
 }
 
 #Preview {
-    ActionFlowView(action: .inkFlush, model: AppModel(previewPrinters: PreviewPrinterBrowser.samplePrinters))
+    ActionFlowView(action: .quietSettings, model: AppModel(previewPrinters: PreviewPrinterBrowser.samplePrinters))
 }

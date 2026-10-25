@@ -59,7 +59,8 @@ final class MaintenanceServiceTests: XCTestCase {
         try await login(remote, bst: "0", prninfoError: nil)
         let service = MaintenanceService(
             chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
-            remote: remote
+            remote: remote,
+            cups: CupsCommandClient(listQueues: { [] })
         )
         try await service.ensureIdle()
     }
@@ -69,7 +70,8 @@ final class MaintenanceServiceTests: XCTestCase {
         try await login(remote, bst: "2", prninfoError: nil)
         let service = MaintenanceService(
             chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
-            remote: remote
+            remote: remote,
+            cups: CupsCommandClient(listQueues: { [] })
         )
         do {
             try await service.ensureIdle()
@@ -86,7 +88,8 @@ final class MaintenanceServiceTests: XCTestCase {
         try await login(remote, bst: "0", prninfoError: URLError(.cannotConnectToHost))
         let service = MaintenanceService(
             chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
-            remote: remote
+            remote: remote,
+            cups: CupsCommandClient(listQueues: { [] })
         )
         do {
             try await service.ensureIdle()
@@ -124,6 +127,90 @@ final class MaintenanceServiceTests: XCTestCase {
         XCTAssertEqual(status, PrinterStatus(isIdle: true, detail: "idle", model: nil))
     }
 
+    func testStatusFallsBackToRemoteUIWhenCHMPFails() async throws {
+        let remote = RemoteUISession(host: "192.168.1.50", session: mockSession())
+        try await login(remote, bst: "0", prninfoError: nil)
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: remote,
+            cups: CupsCommandClient(listQueues: { [] })
+        )
+        let status = try await service.status()
+        XCTAssertEqual(status, PrinterStatus(isIdle: true, detail: "idle", model: nil))
+    }
+
+    func testStatusMapsRemoteUIBusyWhenCHMPFails() async throws {
+        let remote = RemoteUISession(host: "192.168.1.50", session: mockSession())
+        try await login(remote, bst: "2", prninfoError: nil)
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: remote,
+            cups: CupsCommandClient(listQueues: { [] })
+        )
+        let status = try await service.status()
+        XCTAssertEqual(status, PrinterStatus(isIdle: false, detail: "busy", model: nil))
+    }
+
+    func testRunPowerOffPostsToCommand2() async throws {
+        var sawPOST = false
+        MockURLProtocol.requestHandler = { request in
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.path, "/canon/ij/command2/port1")
+            XCTAssertEqual(request.httpMethod, "POST")
+            sawPOST = true
+            let body = String(data: Self.bodyData(from: request), encoding: .utf8) ?? ""
+            XCTAssertTrue(body.contains("PowerOff"), body)
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+        try await makeService().run(.powerOff)
+        XCTAssertTrue(sawPOST)
+    }
+
+    func testRunPowerOffTreatsConnectionDropAsSuccess() async throws {
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.networkConnectionLost)
+        }
+        try await makeService().run(.powerOff)
+    }
+
+    private static func bodyData(from request: URLRequest) -> Data {
+        if let httpBody = request.httpBody { return httpBody }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let bufferSize = 1024
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            if read > 0 { data.append(buffer, count: read) }
+            else { break }
+        }
+        return data
+    }
+
+    func testRunUsesCupsCommandWhenQueueAvailable() async throws {
+        var sentQueue: String?
+        var sentBody: String?
+        let cups = CupsCommandClient(
+            listQueues: { ["Canon_G3010_series"] },
+            runLP: { queue, url in
+                sentQueue = queue
+                sentBody = try String(contentsOf: url, encoding: .utf8)
+            }
+        )
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: RemoteUISession(host: "192.168.1.50", session: mockSession()),
+            cups: cups
+        )
+        try await service.run(.cleaning)
+        XCTAssertEqual(sentQueue, "Canon_G3010_series")
+        XCTAssertEqual(sentBody, "#CUPS-COMMAND\nClean all\n")
+    }
+
     private func login(_ remote: RemoteUISession, bst: String, prninfoError: (any Error)?) async throws {
         MockURLProtocol.requestHandler = { request in
             let url = try XCTUnwrap(request.url)
@@ -151,7 +238,8 @@ final class MaintenanceServiceTests: XCTestCase {
     private func makeService() -> MaintenanceService {
         MaintenanceService(
             chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
-            remote: RemoteUISession(host: "192.168.1.50", session: mockSession())
+            remote: RemoteUISession(host: "192.168.1.50", session: mockSession()),
+            cups: CupsCommandClient(listQueues: { [] })
         )
     }
 

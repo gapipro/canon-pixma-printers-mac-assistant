@@ -4,6 +4,19 @@ DerivedData/
 *.xcuserstate
 build/
 .idea/
+*.swp
+*~
+
+# Local capture noise / secrets
 docs/captures/*.pcap*
 docs/captures/*password*
+docs/captures/*cookie*
+
+# Canon Windows installer (never publish)
 pat_-win-*.exe
+
+# Agent / SDD scratch (not product docs)
+.superpowers/
+
+# Local helper scripts
+scripts/capture-window.swift

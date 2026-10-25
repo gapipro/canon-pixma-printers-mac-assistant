@@ -20,6 +20,12 @@ struct MainView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    if let serial = model.selectedPrinterSerial {
+                        Text("Serial: \(serial)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
                 Spacer()
                 Button("Select Printer") {

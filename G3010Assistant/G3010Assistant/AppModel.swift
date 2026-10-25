@@ -15,6 +15,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var printerStatus: PrinterStatus?
     @Published private(set) var statusError: String?
     @Published private(set) var isLoadingStatus = false
+    @Published private(set) var isResolvingCredentials = false
+    /// Factory serial from SNMP (also the usual default Remote UI password).
+    @Published private(set) var selectedPrinterSerial: String?
 
     /// Last selected printer host. Restored when discovery or a manual add lists this host again.
     @AppStorage("lastPrinterHost") private var lastPrinterHost = ""
@@ -25,6 +28,7 @@ final class AppModel: ObservableObject {
     private var remote: RemoteUISession?
     private var maintenance: MaintenanceService?
     private var sessionHost: String?
+    private let cups = CupsCommandClient()
 
     init() {
         let browser = PrinterBrowser()
@@ -63,19 +67,17 @@ final class AppModel: ObservableObject {
         selectedPrinter = printer
         printerStatus = nil
         statusError = nil
+        selectedPrinterSerial = nil
         isSelectingPrinter = false
         if sessionHost != printer.host {
             remote = nil
             maintenance = nil
             sessionHost = nil
         }
-        if KeychainStore.password(forHost: printer.host) == nil {
-            passwordError = nil
-            Task { @MainActor in
-                isPromptingPassword = true
-            }
-        } else {
-            connect(host: printer.host)
+        connect(host: printer.host)
+        Task {
+            await refreshSelectedSerial()
+            await ensureCredentials(promptIfNeeded: true)
         }
     }
 
@@ -92,16 +94,20 @@ final class AppModel: ObservableObject {
             isSelectingPrinter = true
             return
         }
-        guard KeychainStore.password(forHost: printer.host) != nil else {
-            passwordError = nil
-            isPromptingPassword = true
-            return
-        }
         if maintenance == nil || sessionHost != printer.host {
             connect(host: printer.host)
         }
-        passwordError = nil
-        activeAction = action
+        if canRunWithoutPassword(action, options: ActionOptions()) {
+            passwordError = nil
+            activeAction = action
+            return
+        }
+        Task {
+            let ready = await ensureCredentials(promptIfNeeded: true)
+            guard ready else { return }
+            passwordError = nil
+            activeAction = action
+        }
     }
 
     /// Presents the password sheet after the action sheet has closed.
@@ -111,7 +117,7 @@ final class AppModel: ObservableObject {
         isPromptingPassword = true
     }
 
-    func perform(_ action: AssistantAction) async throws {
+    func perform(_ action: AssistantAction, options: ActionOptions = ActionOptions()) async throws {
         guard let printer = selectedPrinter else {
             throw AppError.unreachable("no printer selected")
         }
@@ -121,13 +127,16 @@ final class AppModel: ObservableObject {
         guard let remote, let maintenance else {
             throw AppError.unreachable(printer.host)
         }
-        guard let password = KeychainStore.password(forHost: printer.host) else {
-            passwordError = AppError.authFailed.localizedDescription
-            throw AppError.authFailed
+
+        if canRunWithoutPassword(action, options: options) {
+            try await maintenance.run(action, options: options)
+            return
         }
+
+        let password = try await requirePassword(for: printer)
         do {
             try await remote.login(password: password)
-            try await maintenance.run(action)
+            try await maintenance.run(action, options: options)
         } catch let error as AppError {
             if error == .authFailed {
                 KeychainStore.deletePassword(forHost: printer.host)
@@ -155,16 +164,29 @@ final class AppModel: ObservableObject {
             statusError = "Select a printer first."
             return
         }
-        if maintenance == nil || sessionHost != printer.host {
+        if remote == nil || maintenance == nil || sessionHost != printer.host {
             connect(host: printer.host)
         }
-        guard let maintenance else { return }
+        guard let remote, let maintenance else { return }
+
         isLoadingStatus = true
         statusError = nil
         defer { isLoadingStatus = false }
+
+        let ready = await ensureCredentials(promptIfNeeded: true)
+        guard ready, let password = KeychainStore.password(forHost: printer.host) else {
+            printerStatus = nil
+            statusError = AppError.authFailed.localizedDescription
+            return
+        }
         do {
+            try await remote.login(password: password)
             printerStatus = try await maintenance.status()
         } catch let error as AppError {
+            if error == .authFailed {
+                KeychainStore.deletePassword(forHost: printer.host)
+                passwordError = error.localizedDescription
+            }
             printerStatus = nil
             statusError = error.localizedDescription
         } catch {
@@ -173,11 +195,80 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Keychain → SNMP serial (factory default password) → optional prompt.
+    @discardableResult
+    func ensureCredentials(promptIfNeeded: Bool) async -> Bool {
+        guard let printer = selectedPrinter else { return false }
+        if KeychainStore.password(forHost: printer.host) != nil {
+            if maintenance == nil || sessionHost != printer.host {
+                connect(host: printer.host)
+            }
+            return true
+        }
+        isResolvingCredentials = true
+        defer { isResolvingCredentials = false }
+        do {
+            let serial = try await SerialNumberClient.fetchSerial(host: printer.host)
+            if selectedPrinter?.host == printer.host {
+                selectedPrinterSerial = serial
+            }
+            if remote == nil || sessionHost != printer.host {
+                connect(host: printer.host)
+            }
+            guard let remote else { return false }
+            try await remote.login(password: serial)
+            KeychainStore.savePassword(serial, forHost: printer.host)
+            passwordError = nil
+            return true
+        } catch {
+            if promptIfNeeded {
+                passwordError = nil
+                isPromptingPassword = true
+            }
+            return false
+        }
+    }
+
+    private func canRunWithoutPassword(_ action: AssistantAction, options: ActionOptions) -> Bool {
+        // CHMP PowerOff does not use Remote UI auth.
+        if action == .powerOff { return true }
+        guard CupsCommandClient.supports(action), cups.availableQueue() != nil else { return false }
+        if action == .headAlignment, options.headAlignment != .automatic { return false }
+        return true
+    }
+
+    private func refreshSelectedSerial() async {
+        guard let host = selectedPrinter?.host else {
+            selectedPrinterSerial = nil
+            return
+        }
+        do {
+            let serial = try await SerialNumberClient.fetchSerial(host: host)
+            guard selectedPrinter?.host == host else { return }
+            selectedPrinterSerial = serial
+        } catch {
+            guard selectedPrinter?.host == host else { return }
+            // Keep nil; top bar just omits the serial line.
+        }
+    }
+
+    private func requirePassword(for printer: PrinterDevice) async throws -> String {
+        if let existing = KeychainStore.password(forHost: printer.host) {
+            return existing
+        }
+        let ready = await ensureCredentials(promptIfNeeded: true)
+        guard ready, let password = KeychainStore.password(forHost: printer.host) else {
+            passwordError = AppError.authFailed.localizedDescription
+            throw AppError.authFailed
+        }
+        return password
+    }
+
     private func connect(host: String) {
         let remote = RemoteUISession(host: host)
         let chmp = CHMPClient(host: host)
         self.remote = remote
-        self.maintenance = MaintenanceService(chmp: chmp, remote: remote)
+        self.maintenance = MaintenanceService(chmp: chmp, remote: remote, cups: cups)
         self.sessionHost = host
     }
 

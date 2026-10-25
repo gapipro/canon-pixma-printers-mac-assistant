@@ -36,7 +36,7 @@ struct PasswordPrompt: View {
 
     private var prompt: String {
         let name = model.selectedPrinter?.displayName ?? "this printer"
-        return "Enter the Remote UI admin password for \(name). It is saved in Keychain for this printer."
+        return "Enter the Remote UI admin password for \(name). On most G3010 printers this is the serial number (shown on the label). It is saved in Keychain for this printer."
     }
 
     private func save() {
