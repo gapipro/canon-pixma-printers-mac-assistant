@@ -6,3 +6,4 @@ build/
 .idea/
 docs/captures/*.pcap*
 docs/captures/*password*
+pat_-win-*.exe
