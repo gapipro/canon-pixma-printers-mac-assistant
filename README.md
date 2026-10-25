@@ -7,7 +7,7 @@ Native macOS maintenance app for Canon PIXMA ink-tank printers over Wi‑Fi (bui
 ## Features
 
 - **Bonjour discovery** of printers on the local network (`_ipp._tcp`), plus manual IP entry
-- **Password-less login** on factory setups: reads the serial over SNMP and uses it as the Remote UI password, then stores it in Keychain
+- **Password-less login** on factory setups: reads the serial over SNMP and uses it as the Remote UI password (Keychain only if you set a custom password)
 - **Maintenance actions** with option sheets where the printer UI has submenus:
   - Cleaning / Deep Cleaning
   - Print Head Alignment (automatic or print alignment values)
@@ -56,7 +56,7 @@ xcodebuild build -scheme G3010Assistant -destination 'platform=macOS'
 
 ## Printer password
 
-On many G3010 printers the factory Remote UI password is the **serial number**. The app reads that serial over public SNMP and tries it automatically. You are only prompted if that fails (custom password).
+On many G3010 printers the factory Remote UI password is the **serial number**. The app reads that serial over public SNMP and tries it automatically. Keychain is only used if that fails and you enter a custom password.
 
 ## Notes
 

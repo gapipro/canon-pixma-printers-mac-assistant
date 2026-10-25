@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Wires discovery, the selected printer, the Keychain password, and maintenance actions.
+/// Wires discovery, the selected printer, credentials, and maintenance actions.
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var printers: [PrinterDevice] = []
@@ -28,6 +28,9 @@ final class AppModel: ObservableObject {
     private var remote: RemoteUISession?
     private var maintenance: MaintenanceService?
     private var sessionHost: String?
+    /// In-memory password after a successful serial or custom login for `sessionPasswordHost`.
+    private var sessionPassword: String?
+    private var sessionPasswordHost: String?
     private let cups = CupsCommandClient()
 
     init() {
@@ -73,6 +76,7 @@ final class AppModel: ObservableObject {
             remote = nil
             maintenance = nil
             sessionHost = nil
+            clearSessionPassword()
         }
         connect(host: printer.host)
         Task {
@@ -81,9 +85,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Stores a custom Remote UI password (used only when the factory serial password failed).
     func savePassword(_ password: String) {
         guard let printer = selectedPrinter, !password.isEmpty else { return }
         KeychainStore.savePassword(password, forHost: printer.host)
+        rememberSessionPassword(password, host: printer.host)
         passwordError = nil
         connect(host: printer.host)
         isPromptingPassword = false
@@ -112,8 +118,7 @@ final class AppModel: ObservableObject {
 
     /// Presents the password sheet after the action sheet has closed.
     func promptForRejectedPasswordIfNeeded() {
-        guard passwordError != nil, let host = selectedPrinter?.host else { return }
-        guard KeychainStore.password(forHost: host) == nil else { return }
+        guard passwordError != nil, selectedPrinter != nil else { return }
         isPromptingPassword = true
     }
 
@@ -139,7 +144,7 @@ final class AppModel: ObservableObject {
             try await maintenance.run(action, options: options)
         } catch let error as AppError {
             if error == .authFailed {
-                KeychainStore.deletePassword(forHost: printer.host)
+                forgetCredentials(forHost: printer.host)
                 passwordError = error.localizedDescription
             }
             throw error
@@ -174,7 +179,7 @@ final class AppModel: ObservableObject {
         defer { isLoadingStatus = false }
 
         let ready = await ensureCredentials(promptIfNeeded: true)
-        guard ready, let password = KeychainStore.password(forHost: printer.host) else {
+        guard ready, let password = sessionPassword(forHost: printer.host) else {
             printerStatus = nil
             statusError = AppError.authFailed.localizedDescription
             return
@@ -184,7 +189,7 @@ final class AppModel: ObservableObject {
             printerStatus = try await maintenance.status()
         } catch let error as AppError {
             if error == .authFailed {
-                KeychainStore.deletePassword(forHost: printer.host)
+                forgetCredentials(forHost: printer.host)
                 passwordError = error.localizedDescription
             }
             printerStatus = nil
@@ -195,38 +200,58 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Keychain → SNMP serial (factory default password) → optional prompt.
+    /// SNMP serial (factory default) → Keychain custom password → optional prompt.
+    /// Keychain is only read/written when the serial password does not work.
     @discardableResult
     func ensureCredentials(promptIfNeeded: Bool) async -> Bool {
         guard let printer = selectedPrinter else { return false }
-        if KeychainStore.password(forHost: printer.host) != nil {
+        if sessionPassword(forHost: printer.host) != nil {
             if maintenance == nil || sessionHost != printer.host {
                 connect(host: printer.host)
             }
             return true
         }
+
         isResolvingCredentials = true
         defer { isResolvingCredentials = false }
+
+        if remote == nil || sessionHost != printer.host {
+            connect(host: printer.host)
+        }
+        guard let remote else { return false }
+
+        // 1. Factory default: SNMP serial (never persisted to Keychain).
         do {
             let serial = try await SerialNumberClient.fetchSerial(host: printer.host)
             if selectedPrinter?.host == printer.host {
                 selectedPrinterSerial = serial
             }
-            if remote == nil || sessionHost != printer.host {
-                connect(host: printer.host)
-            }
-            guard let remote else { return false }
             try await remote.login(password: serial)
-            KeychainStore.savePassword(serial, forHost: printer.host)
+            rememberSessionPassword(serial, host: printer.host)
             passwordError = nil
             return true
         } catch {
-            if promptIfNeeded {
-                passwordError = nil
-                isPromptingPassword = true
-            }
-            return false
+            // Fall through to custom password.
         }
+
+        // 2. Custom password previously saved after serial failed.
+        if let stored = KeychainStore.password(forHost: printer.host) {
+            do {
+                try await remote.login(password: stored)
+                rememberSessionPassword(stored, host: printer.host)
+                passwordError = nil
+                return true
+            } catch {
+                KeychainStore.deletePassword(forHost: printer.host)
+            }
+        }
+
+        // 3. Ask the user.
+        if promptIfNeeded {
+            passwordError = nil
+            isPromptingPassword = true
+        }
+        return false
     }
 
     private func canRunWithoutPassword(_ action: AssistantAction, options: ActionOptions) -> Bool {
@@ -253,15 +278,37 @@ final class AppModel: ObservableObject {
     }
 
     private func requirePassword(for printer: PrinterDevice) async throws -> String {
-        if let existing = KeychainStore.password(forHost: printer.host) {
+        if let existing = sessionPassword(forHost: printer.host) {
             return existing
         }
         let ready = await ensureCredentials(promptIfNeeded: true)
-        guard ready, let password = KeychainStore.password(forHost: printer.host) else {
+        guard ready, let password = sessionPassword(forHost: printer.host) else {
             passwordError = AppError.authFailed.localizedDescription
             throw AppError.authFailed
         }
         return password
+    }
+
+    private func sessionPassword(forHost host: String) -> String? {
+        guard sessionPasswordHost == host else { return nil }
+        return sessionPassword
+    }
+
+    private func rememberSessionPassword(_ password: String, host: String) {
+        sessionPassword = password
+        sessionPasswordHost = host
+    }
+
+    private func clearSessionPassword() {
+        sessionPassword = nil
+        sessionPasswordHost = nil
+    }
+
+    private func forgetCredentials(forHost host: String) {
+        if sessionPasswordHost == host {
+            clearSessionPassword()
+        }
+        KeychainStore.deletePassword(forHost: host)
     }
 
     private func connect(host: String) {
