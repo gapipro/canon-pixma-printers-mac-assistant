@@ -66,6 +66,26 @@ actor RemoteUISession {
         loggedIn = true
     }
 
+    /// Printer status from Remote UI. `true` when `BST_STATE` is present and not `0`.
+    /// Requires a logged-in session so the body can include `SBID`.
+    func fetchPrinterBusy() async throws -> Bool {
+        guard loggedIn, let sbid else { throw AppError.authFailed }
+        var request = URLRequest(url: url(path: "/rui/prninfo_data.cgi"))
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("GETINFO=0&SBID=\(Self.formEscape(sbid))".utf8)
+        let (data, response) = try await load(request)
+        guard let http = response as? HTTPURLResponse else { throw AppError.unreachable(host) }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        guard (200..<300).contains(http.statusCode) else {
+            throw AppError.http(http.statusCode, text)
+        }
+        guard let state = Self.bstState(in: text) else {
+            throw AppError.parse("response missing BST_STATE")
+        }
+        return state != "0"
+    }
+
     func perform(_ endpoint: ActionEndpoint) async throws {
         guard loggedIn || endpoint.kind == .chmp else { throw AppError.authFailed }
         let url = url(path: endpoint.path)
@@ -98,6 +118,18 @@ actor RemoteUISession {
     /// Lowercase hex SHA-256 of the password's UTF-8 bytes (CryptoJS.SHA256).
     static func sha256Hex(_ password: String) -> String {
         SHA256.hash(data: Data(password.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// First `<BST_STATE>…</BST_STATE>` value, or nil when the tag is absent.
+    static func bstState(in xml: String) -> String? {
+        let open = "<BST_STATE>"
+        let close = "</BST_STATE>"
+        guard let start = xml.range(of: open),
+              let end = xml.range(of: close, range: start.upperBound..<xml.endIndex) else {
+            return nil
+        }
+        let value = xml[start.upperBound..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     static func extractSBID(from html: String) -> String? {

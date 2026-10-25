@@ -13,7 +13,11 @@ struct ActionEndpoint: Equatable {
 enum EndpointMap {
     /// Captured from the G3010 Remote UI. `bodyTemplate` omits `SBID`; `RemoteUISession` appends it.
     /// Job-kick rows use `RW_OK`. `perform` also accepts `RW_POLLING` and rejects `RW_NG`.
-    /// Power Off and Auto Power read `/rui/ut_data.cgi` (`RD_PAGE_UT`). This firmware has no power-off CGI.
+    /// Quiet mode posts `SILENT_MODE=OFF` (restore). A later UI can offer ON/OFF; OFF is the safer default.
+    /// Ink notification resets the counter (`INK_CNT_RESET=SET`).
+    /// Auto power writes the power-save schedule. A live SET returns `RESULT` `RD_PAGE_UT`.
+    /// Power Off only reads `/rui/ut_data.cgi` (energy/utility status). This firmware has no power-off CGI.
+    /// Custom settings reads `/rui/machininfo_data.cgi` (`GETINFO=0`) as a view/sync, not a write.
     private static let table: [AssistantAction: ActionEndpoint] = [
         .cleaning: ActionEndpoint(
             kind: .remoteUIForm,
@@ -54,7 +58,7 @@ enum EndpointMap {
             kind: .remoteUIForm,
             path: "/rui/detect_ink_end.cgi",
             method: "POST",
-            bodyTemplate: "GETINFO=0",
+            bodyTemplate: "SETINFO=0&INK_CNT_RESET=SET",
             successContains: "RW_OK"
         ),
         .bottomPlateCleaning: ActionEndpoint(
@@ -82,14 +86,14 @@ enum EndpointMap {
             kind: .remoteUIForm,
             path: "/rui/ut_data.cgi",
             method: "POST",
-            bodyTemplate: "GETINFO=0",
+            bodyTemplate: "SETINFO=0&POWER_SAVE_OFF=ON&POWER_SAVE_TIME=15",
             successContains: "RD_PAGE_UT"
         ),
         .quietSettings: ActionEndpoint(
             kind: .remoteUIForm,
             path: "/rui/silent_mode.cgi",
             method: "POST",
-            bodyTemplate: "SILENT_MODE=ON",
+            bodyTemplate: "SILENT_MODE=OFF",
             successContains: "RW_OK"
         ),
         .customSettings: ActionEndpoint(

@@ -9,12 +9,12 @@ final class EndpointMapTests: XCTestCase {
             .headAlignment: ("/rui/ut_auto_regi.cgi", "", "RW_OK"),
             .nozzleCheck: ("/rui/ut_nozzle_check.cgi", "", "RW_OK"),
             .inkFlush: ("/rui/ut_system_cln.cgi", "", "RW_OK"),
-            .inkNotificationSettings: ("/rui/detect_ink_end.cgi", "GETINFO=0", "RW_OK"),
+            .inkNotificationSettings: ("/rui/detect_ink_end.cgi", "SETINFO=0&INK_CNT_RESET=SET", "RW_OK"),
             .bottomPlateCleaning: ("/rui/ut_platen_cln.cgi", "", "RW_OK"),
             .rollerCleaning: ("/rui/ut_roller_mf_cln.cgi", "", "RW_OK"),
             .powerOff: ("/rui/ut_data.cgi", "GETINFO=0", "RD_PAGE_UT"),
-            .autoPower: ("/rui/ut_data.cgi", "GETINFO=0", "RD_PAGE_UT"),
-            .quietSettings: ("/rui/silent_mode.cgi", "SILENT_MODE=ON", "RW_OK"),
+            .autoPower: ("/rui/ut_data.cgi", "SETINFO=0&POWER_SAVE_OFF=ON&POWER_SAVE_TIME=15", "RD_PAGE_UT"),
+            .quietSettings: ("/rui/silent_mode.cgi", "SILENT_MODE=OFF", "RW_OK"),
             .customSettings: ("/rui/machininfo_data.cgi", "GETINFO=0", "RD_PAGE_HARD"),
         ]
 

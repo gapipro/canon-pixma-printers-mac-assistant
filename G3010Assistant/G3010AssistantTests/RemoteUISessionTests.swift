@@ -333,12 +333,73 @@ final class RemoteUISessionTests: XCTestCase {
             kind: .remoteUIForm,
             path: "/rui/silent_mode.cgi",
             method: "POST",
-            bodyTemplate: "SILENT_MODE=ON",
+            bodyTemplate: "SILENT_MODE=OFF",
             successContains: "RW_OK"
         ))
         let perform = try XCTUnwrap(log.all().last)
-        XCTAssertEqual(perform.body, "SILENT_MODE=ON&SBID=abc%2B%2F%3D")
+        XCTAssertEqual(perform.body, "SILENT_MODE=OFF&SBID=abc%2B%2F%3D")
         XCTAssertEqual(perform.url, "https://192.168.1.50/rui/silent_mode.cgi")
+    }
+
+    func testFetchPrinterBusyPostsPrninfoAndReadsBSTState() async throws {
+        let log = ExchangeLog()
+        var calls = 0
+        MockURLProtocol.requestHandler = { request in
+            log.add(request)
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/rui/prninfo_data.cgi" {
+                calls += 1
+                let state = calls == 1 ? "0" : "2"
+                let xml = "<response><BST_STATE>\(state)</BST_STATE><RESULT>RD_PAGE_PRN</RESULT></response>"
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (response, Data(xml.utf8))
+            }
+            return Self.loginResponse(url: url, sbid: "statusSBID", cookie: nil)
+        }
+        let session = makeSession()
+        do {
+            _ = try await session.fetchPrinterBusy()
+            XCTFail("expected authFailed")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .authFailed)
+        }
+        try await session.login(password: "secret")
+        let idle = try await session.fetchPrinterBusy()
+        let busy = try await session.fetchPrinterBusy()
+        XCTAssertFalse(idle)
+        XCTAssertTrue(busy)
+        let posts = log.all().filter { $0.url?.contains("/rui/prninfo_data.cgi") == true }
+        XCTAssertEqual(posts.count, 2)
+        XCTAssertEqual(posts[0].method, "POST")
+        XCTAssertEqual(posts[0].url, "https://192.168.1.50/rui/prninfo_data.cgi")
+        XCTAssertEqual(posts[0].body, "GETINFO=0&SBID=statusSBID")
+        XCTAssertEqual(RemoteUISession.bstState(in: "<BST_STATE> 0 </BST_STATE>"), "0")
+        XCTAssertNil(RemoteUISession.bstState(in: "<response></response>"))
+    }
+
+    func testFetchPrinterBusyThrowsWhenBSTStateMissing() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/rui/prninfo_data.cgi" {
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+                return (response, Data("<response><RESULT>RD_PAGE_PRN</RESULT></response>".utf8))
+            }
+            return Self.loginResponse(url: url, sbid: "statusSBID", cookie: nil)
+        }
+        let session = makeSession()
+        try await session.login(password: "secret")
+        do {
+            _ = try await session.fetchPrinterBusy()
+            XCTFail("expected parse")
+        } catch let error as AppError {
+            guard case .parse(let message) = error else {
+                XCTFail("expected parse, got \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains("BST_STATE"))
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
     }
 
     func testLoginExtractsSBIDWhenValuePrecedesName() async throws {

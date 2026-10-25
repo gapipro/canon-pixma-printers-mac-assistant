@@ -20,7 +20,7 @@ final class MaintenanceServiceTests: XCTestCase {
         }
     }
 
-    func testEnsureIdleContinuesWhenCHMPConflicts() async throws {
+    func testEnsureIdleThrowsUnreachableWhenCHMPConflictsAndRemoteUIFails() async {
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -30,14 +30,72 @@ final class MaintenanceServiceTests: XCTestCase {
             )!
             return (response, Data("conflict".utf8))
         }
-        try await makeService().ensureIdle()
+        do {
+            try await makeService().ensureIdle()
+            XCTFail("expected unreachable")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unreachable("192.168.1.50"))
+        } catch {
+            XCTFail("wrong error \(error)")
+        }
     }
 
-    func testEnsureIdleContinuesWhenCHMPTimesOut() async throws {
+    func testEnsureIdleThrowsUnreachableWhenCHMPTimesOutAndRemoteUIFails() async {
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.timedOut)
         }
-        try await makeService().ensureIdle()
+        do {
+            try await makeService().ensureIdle()
+            XCTFail("expected unreachable")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unreachable("192.168.1.50"))
+        } catch {
+            XCTFail("wrong error \(error)")
+        }
+    }
+
+    func testEnsureIdleAcceptsRemoteUIBSTStateZeroWhenCHMPFails() async throws {
+        let remote = RemoteUISession(host: "192.168.1.50", session: mockSession())
+        try await login(remote, bst: "0", prninfoError: nil)
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: remote
+        )
+        try await service.ensureIdle()
+    }
+
+    func testEnsureIdleThrowsBusyWhenRemoteUIBSTStateIsNonZero() async throws {
+        let remote = RemoteUISession(host: "192.168.1.50", session: mockSession())
+        try await login(remote, bst: "2", prninfoError: nil)
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: remote
+        )
+        do {
+            try await service.ensureIdle()
+            XCTFail("expected busy")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .busy("BST_STATE != 0"))
+        } catch {
+            XCTFail("wrong error \(error)")
+        }
+    }
+
+    func testEnsureIdleThrowsUnreachableWhenRemoteUIStatusFails() async throws {
+        let remote = RemoteUISession(host: "192.168.1.50", session: mockSession())
+        try await login(remote, bst: "0", prninfoError: URLError(.cannotConnectToHost))
+        let service = MaintenanceService(
+            chmp: CHMPClient(host: "192.168.1.50", session: mockSession()),
+            remote: remote
+        )
+        do {
+            try await service.ensureIdle()
+            XCTFail("expected unreachable")
+        } catch let error as AppError {
+            XCTAssertEqual(error, .unreachable("192.168.1.50"))
+        } catch {
+            XCTFail("wrong error \(error)")
+        }
     }
 
     func testRunThrowsBusyWhenPrinterIsNotIdle() async {
@@ -64,6 +122,30 @@ final class MaintenanceServiceTests: XCTestCase {
         let service = makeService()
         let status = try await service.status()
         XCTAssertEqual(status, PrinterStatus(isIdle: true, detail: "idle", model: nil))
+    }
+
+    private func login(_ remote: RemoteUISession, bst: String, prninfoError: (any Error)?) async throws {
+        MockURLProtocol.requestHandler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/canon/ij/command2/port1" {
+                let response = HTTPURLResponse(url: url, statusCode: 409, httpVersion: nil, headerFields: nil)!
+                return (response, Data("conflict".utf8))
+            }
+            if url.path == "/rui/prninfo_data.cgi" {
+                if let prninfoError { throw prninfoError }
+                let xml = "<response><BST_STATE>\(bst)</BST_STATE></response>"
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Data(xml.utf8))
+            }
+            if url.path == "/rui/sendpw.cgi" {
+                let html = "<input type=\"hidden\" name=\"SBID\" value=\"idleSBID\">"
+                let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                return (response, Data(html.utf8))
+            }
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data("ok".utf8))
+        }
+        try await remote.login(password: "secret")
     }
 
     private func makeService() -> MaintenanceService {
