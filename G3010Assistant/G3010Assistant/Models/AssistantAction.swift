@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 enum AssistantAction: String, CaseIterable, Identifiable {
     case cleaning
@@ -53,12 +53,25 @@ enum AssistantAction: String, CaseIterable, Identifiable {
     var isInkHeavy: Bool {
         self == .deepCleaning || self == .inkFlush
     }
-}
 
-extension AssistantAction {
+    var iconTint: Color {
+        switch self {
+        case .cleaning: return .primary
+        case .deepCleaning: return .cyan
+        case .headAlignment: return .blue
+        case .nozzleCheck: return .indigo
+        case .inkFlush: return .teal
+        case .inkNotificationSettings: return .orange
+        case .bottomPlateCleaning, .rollerCleaning: return .yellow
+        case .powerOff, .autoPower, .customSettings: return .secondary
+        case .quietSettings: return .blue
+        }
+    }
+
     static var leftColumn: [AssistantAction] {
         [.cleaning, .deepCleaning, .headAlignment, .nozzleCheck, .inkFlush, .inkNotificationSettings]
     }
+
     static var rightColumn: [AssistantAction] {
         [.bottomPlateCleaning, .rollerCleaning, .powerOff, .autoPower, .quietSettings, .customSettings]
     }
