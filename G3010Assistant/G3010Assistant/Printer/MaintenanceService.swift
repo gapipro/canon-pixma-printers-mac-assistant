@@ -9,9 +9,17 @@ actor MaintenanceService {
         self.remote = remote
     }
 
+    /// CHMP GetStatus often returns 409 or times out on this G3010. A parsed busy status still blocks.
+    /// Any other CHMP failure is skipped so Remote UI actions can run.
     func ensureIdle() async throws {
-        let status = try await chmp.fetchPrintStatus()
-        if !status.isIdle { throw AppError.busy(status.detail) }
+        do {
+            let status = try await chmp.fetchPrintStatus()
+            if !status.isIdle { throw AppError.busy(status.detail) }
+        } catch AppError.busy(let detail) {
+            throw AppError.busy(detail)
+        } catch {
+            return
+        }
     }
 
     func run(_ action: AssistantAction) async throws {

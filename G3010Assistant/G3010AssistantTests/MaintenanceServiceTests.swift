@@ -7,17 +7,37 @@ final class MaintenanceServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    func testRunThrowsWhenUnmapped() async {
+    func testRunReachesMappedActionWhenIdle() async {
         stubPrintStatus("idle")
         let service = makeService()
         do {
             try await service.run(.cleaning)
             XCTFail("expected throw")
         } catch let e as AppError {
-            XCTAssertEqual(e, .endpointMissing(.cleaning))
+            XCTAssertEqual(e, .authFailed)
         } catch {
             XCTFail("wrong error \(error)")
         }
+    }
+
+    func testEnsureIdleContinuesWhenCHMPConflicts() async throws {
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 409,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("conflict".utf8))
+        }
+        try await makeService().ensureIdle()
+    }
+
+    func testEnsureIdleContinuesWhenCHMPTimesOut() async throws {
+        MockURLProtocol.requestHandler = { _ in
+            throw URLError(.timedOut)
+        }
+        try await makeService().ensureIdle()
     }
 
     func testRunThrowsBusyWhenPrinterIsNotIdle() async {

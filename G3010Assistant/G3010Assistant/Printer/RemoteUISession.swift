@@ -1,18 +1,18 @@
+import CryptoKit
 import Foundation
 
 actor RemoteUISession {
-    /// Placeholder path for the Remote UI login POST.
-    /// Task 10 replaces this constant from `docs/captures/remote-ui-actions.md` after a live capture.
-    static let loginPath = "/"
+    /// Captured Remote UI login POST. Password is SHA-256 hex in `NAMAE`, never plaintext.
+    static let loginPath = "/rui/sendpw.cgi"
 
-    /// Placeholder form field name for the admin password (`Password=...`).
-    /// Task 10 replaces this constant from `docs/captures/remote-ui-actions.md` after a live capture.
-    static let passwordField = "Password"
+    /// Form field that carries the SHA-256 hex digest of the admin password.
+    static let passwordField = "NAMAE"
 
     let host: String
     private let session: URLSession
     private let cookieStorage: HTTPCookieStorage
     private var loggedIn = false
+    private var sbid: String?
 
     init(host: String, session: URLSession) {
         self.host = host
@@ -40,20 +40,29 @@ actor RemoteUISession {
     }
 
     func login(password: String) async throws {
-        let url = url(path: Self.loginPath)
-        var request = URLRequest(url: url)
+        let page = URLRequest(url: url(path: "/rui/login_manager.html"))
+        let (_, pageResponse) = try await load(page)
+        try acceptLogin(pageResponse)
+
+        var request = URLRequest(url: url(path: Self.loginPath))
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.formEncoded([Self.passwordField: password])
+        let digest = Self.sha256Hex(password)
+        request.httpBody = Data("\(Self.passwordField)=\(digest)&IDTYPE=2".utf8)
 
-        let (_, response) = try await load(request)
-        guard let http = response as? HTTPURLResponse else { throw AppError.authFailed }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw AppError.authFailed
-        }
-        guard (200..<400).contains(http.statusCode) else {
-            throw AppError.authFailed
-        }
+        let (data, response) = try await load(request)
+        try acceptLogin(response)
+        let html = String(data: data, encoding: .utf8) ?? ""
+        guard let sbid = Self.extractSBID(from: html) else { throw AppError.authFailed }
+
+        var index = URLRequest(url: url(path: "/rui/index.html"))
+        index.httpMethod = "POST"
+        index.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        index.httpBody = Data("SBID=\(Self.formEscape(sbid))".utf8)
+        let (_, indexResponse) = try await load(index)
+        try acceptLogin(indexResponse)
+
+        self.sbid = sbid
         loggedIn = true
     }
 
@@ -62,8 +71,9 @@ actor RemoteUISession {
         let url = url(path: endpoint.path)
         var request = URLRequest(url: url)
         request.httpMethod = endpoint.method
-        if !endpoint.bodyTemplate.isEmpty {
-            request.httpBody = Data(endpoint.bodyTemplate.utf8)
+        let body = requestBody(for: endpoint)
+        if !body.isEmpty {
+            request.httpBody = Data(body.utf8)
             let contentType = endpoint.kind == .chmp
                 ? "application/octet-stream"
                 : "application/x-www-form-urlencoded"
@@ -71,12 +81,13 @@ actor RemoteUISession {
         }
         let (data, response) = try await load(request)
         guard let http = response as? HTTPURLResponse else { throw AppError.unreachable(host) }
-        let body = String(data: data, encoding: .utf8) ?? ""
+        let text = String(data: data, encoding: .utf8) ?? ""
         guard (200..<300).contains(http.statusCode) else {
-            throw AppError.http(http.statusCode, body)
+            throw AppError.http(http.statusCode, text)
         }
-        guard body.contains(endpoint.successContains) else {
-            throw AppError.parse("response missing \(endpoint.successContains)")
+        guard Self.isSuccessful(body: text, marker: endpoint.successContains) else {
+            let expected = endpoint.successContains == "RW_OK" ? "RW_OK or RW_POLLING" : endpoint.successContains
+            throw AppError.parse("response missing \(expected)")
         }
     }
 
@@ -84,8 +95,55 @@ actor RemoteUISession {
         URL(string: "http://\(host)/")!
     }
 
+    /// Lowercase hex SHA-256 of the password's UTF-8 bytes (CryptoJS.SHA256).
+    static func sha256Hex(_ password: String) -> String {
+        SHA256.hash(data: Data(password.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func extractSBID(from html: String) -> String? {
+        let patterns = [
+            #"(?i)name\s*=\s*["']SBID["'][^>]*value\s*=\s*["']([^"']+)["']"#,
+            #"(?i)value\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']SBID["']"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(html.startIndex..., in: html)
+            guard let match = regex.firstMatch(in: html, range: range),
+                  let valueRange = Range(match.range(at: 1), in: html) else { continue }
+            let value = String(html[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    private func acceptLogin(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { throw AppError.authFailed }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw AppError.authFailed
+        }
+        guard (200..<400).contains(http.statusCode) else {
+            throw AppError.authFailed
+        }
+    }
+
+    private func requestBody(for endpoint: ActionEndpoint) -> String {
+        guard endpoint.kind == .remoteUIForm, let sbid else { return endpoint.bodyTemplate }
+        let pair = "SBID=\(Self.formEscape(sbid))"
+        if endpoint.bodyTemplate.isEmpty { return pair }
+        return "\(endpoint.bodyTemplate)&\(pair)"
+    }
+
+    /// Job-kick pages return `RW_OK` or `RW_POLLING`. `RW_NG` is a failure even if the marker is `RW_OK`.
+    private static func isSuccessful(body: String, marker: String) -> Bool {
+        if marker == "RW_OK" {
+            if body.contains("RW_NG") { return false }
+            return body.contains("RW_OK") || body.contains("RW_POLLING")
+        }
+        return body.contains(marker)
+    }
+
     private func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        let redirect = CookieRedirectDelegate(storage: cookieStorage)
+        let redirect = CookieRedirectDelegate(storage: cookieStorage, host: host)
         let request = applyingCookies(to: request)
         do {
             let (data, response) = try await session.data(for: request, delegate: redirect)
@@ -120,23 +178,41 @@ actor RemoteUISession {
             return URL(string: path)!
         }
         let normalized = path.hasPrefix("/") ? path : "/" + path
-        return URL(string: "http://\(host)\(normalized)")!
+        let scheme = normalized == "/rui" || normalized.hasPrefix("/rui/") ? "https" : "http"
+        return URL(string: "\(scheme)://\(host)\(normalized)")!
     }
 
-    private static func formEncoded(_ fields: [String: String]) -> Data {
-        var components = URLComponents()
-        components.queryItems = fields.map { URLQueryItem(name: $0.key, value: $0.value) }
-        return Data((components.percentEncodedQuery ?? "").utf8)
+    private static func formEscape(_ value: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 }
 
 /// Captures `Set-Cookie` on redirect responses. `URLSession.data(for:)` only returns the final response,
 /// and a login `302` often carries the session cookie.
+/// The printer Remote UI certificate is self-signed for the LAN host, so server trust for `host` is accepted.
 private final class CookieRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let storage: HTTPCookieStorage
+    private let host: String
 
-    init(storage: HTTPCookieStorage) {
+    init(storage: HTTPCookieStorage, host: String) {
         self.storage = storage
+        self.host = host
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust,
+              space.host.caseInsensitiveCompare(host) == .orderedSame else {
+            return (.performDefaultHandling, nil)
+        }
+        return (.useCredential, URLCredential(trust: trust))
     }
 
     func urlSession(

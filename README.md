@@ -28,6 +28,6 @@ The app asks for the Remote UI admin password and stores it in Keychain for that
 
 ## Maintenance actions
 
-`EndpointMap` stays empty until a live Remote UI session is written up under `docs/captures/` (`docs/captures/README.md`, `docs/captures/remote-ui-actions.md`) and copied into the map. Do not invent paths. Until then, each maintenance action fails with no mapped endpoint.
+Maintenance actions post the captured Remote UI forms in `EndpointMap` (`docs/captures/remote-ui-actions.md`). Power Off and Auto Power read the utility page; this G3010 firmware has no power-off CGI. Quiet Settings sends `SILENT_MODE=ON`.
 
 **Open Remote UI in Safari** opens `http://<printer-host>/` with `NSWorkspace` (the printer’s Remote UI home page) so the action can be run there.
