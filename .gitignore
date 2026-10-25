@@ -19,3 +19,4 @@ pat_-win-*.exe
 
 # Local helper scripts
 scripts/capture-window.swift
+dist/

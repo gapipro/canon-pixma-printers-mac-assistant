@@ -22,13 +22,24 @@ Native macOS maintenance app for Canon PIXMA ink-tank printers over Wi‑Fi (bui
 - **CUPS / Gutenprint path** for cleaning, nozzle check, and head alignment when a matching queue exists (no Remote UI password needed)
 - **Printer status** view from Remote UI
 
+## Download
+
+Grab the latest macOS build from [Releases](https://github.com/gapipro/canon-pixma-printers-mac-assistant/releases):
+
+1. Download `G3010-Assistant-macOS-*.zip` and unzip it.
+2. Drag **G3010 Assistant** to Applications (or run it from anywhere).
+3. First launch: right-click the app → **Open** → **Open** (Gatekeeper blocks unsigned downloads once).
+   Or clear quarantine in Terminal: `xattr -cr "/Applications/G3010 Assistant.app"`
+
+The release build is a universal binary (Apple Silicon + Intel), ad‑hoc signed. It is **not** notarized with an Apple Developer ID.
+
 ## Requirements
 
 - macOS 14+
-- Xcode 15+ (or newer) to build
 - Printer on the same LAN (Wi‑Fi)
 - **Local Network** permission on first launch (System Settings → Privacy & Security → Local Network)
 - Optional: a CUPS queue with Gutenprint for password-less cleaning / nozzle / align
+- Xcode 15+ if you build from source
 
 ## Build
 
@@ -42,8 +53,6 @@ cd G3010Assistant
 xcodebuild test -scheme G3010Assistant -destination 'platform=macOS'
 xcodebuild build -scheme G3010Assistant -destination 'platform=macOS'
 ```
-
-The app is signed locally (“Sign to Run Locally”). It is not notarized for distribution outside your Mac.
 
 ## Printer password
 
