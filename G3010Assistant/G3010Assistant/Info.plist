@@ -7,6 +7,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ipp._tcp</string>
+		<string>_ipps._tcp</string>
 		<string>_canon-chmp._tcp</string>
 	</array>
 </dict>

@@ -16,20 +16,27 @@ protocol PrinterBrowsing: AnyObject {
 ///
 /// Bonjour browse results carry the service name and TXT (`ty`, `usb_MDL`), not an address.
 /// A short TCP connection to the advertised IPP endpoint is how Network.framework resolves that service to a host.
+/// A failed resolve retries about 8 seconds later from the last browse results, even when that set does not change.
 @MainActor
 final class PrinterBrowser: ObservableObject, PrinterBrowsing {
     nonisolated static let serviceType = "_ipp._tcp"
     nonisolated static let serviceDomain = "local."
+    private static let resolveRetryDelay: TimeInterval = 8
 
     @Published private(set) var printers: [PrinterDevice] = []
 
     private let log = Logger(subsystem: "local.g3010.assistant", category: "discovery")
     private var browser: NWBrowser?
+    /// Bumped on `start` and `stop` so browse updates, resolves, and scheduled retries from an older session are ignored.
     private var generation = 0
     private var manualByHost: [String: PrinterDevice] = [:]
     private var resolvedByKey: [String: PrinterDevice] = [:]
     private var resolvers: [String: EndpointResolver] = [:]
+    /// Identifies the in-flight resolve or the retry scheduled for it. Replaced to drop stale callbacks.
+    private var attemptTokens: [String: UUID] = [:]
     private var retryAfter: [String: Date] = [:]
+    private var retryTasks: [String: Task<Void, Never>] = [:]
+    private var lastResults: Set<NWBrowser.Result> = []
 
     func start() {
         guard browser == nil else { return }
@@ -65,7 +72,14 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
         let pending = resolvers
         resolvers.removeAll()
         resolvedByKey.removeAll()
+        attemptTokens.removeAll()
         retryAfter.removeAll()
+        lastResults = []
+        let retries = retryTasks
+        retryTasks.removeAll()
+        for task in retries.values {
+            task.cancel()
+        }
         for resolver in pending.values {
             resolver.cancel()
         }
@@ -110,12 +124,15 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
     }
 
     private func apply(results: Set<NWBrowser.Result>, generation: Int) {
+        guard self.generation == generation else { return }
+        lastResults = results
+
         var matching: [String: Match] = [:]
         for result in results {
             guard case .service(let name, let type, let domain, _) = result.endpoint else { continue }
             let txt = Self.txtDictionary(from: result)
             guard Self.isCanonOrG3010(name: name, txt: txt) else { continue }
-            let key = "\(name)\u{0}\(type)\u{0}\(domain)"
+            let key = Self.serviceKey(name: name, type: type, domain: domain)
             if matching[key] == nil {
                 matching[key] = Match(name: name, txt: txt, endpoint: result.endpoint)
             }
@@ -124,10 +141,9 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
         for key in resolvedByKey.keys where matching[key] == nil {
             resolvedByKey[key] = nil
         }
-        for key in resolvers.keys where matching[key] == nil {
-            resolvers[key]?.cancel()
-            resolvers[key] = nil
-            retryAfter[key] = nil
+        let tracked = Set(resolvers.keys).union(retryAfter.keys).union(retryTasks.keys)
+        for key in tracked where matching[key] == nil {
+            invalidateAttempt(key)
         }
 
         let now = Date()
@@ -139,6 +155,8 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
             if resolvers[key] != nil { continue }
             if let until = retryAfter[key], until > now { continue }
 
+            let token = UUID()
+            attemptTokens[key] = token
             let resolver = EndpointResolver(endpoint: match.endpoint) { [weak self] host in
                 Task { @MainActor in
                     self?.didResolve(
@@ -146,6 +164,7 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
                         name: match.name,
                         txt: match.txt,
                         host: host,
+                        token: token,
                         generation: generation
                     )
                 }
@@ -156,18 +175,56 @@ final class PrinterBrowser: ObservableObject, PrinterBrowsing {
         publish()
     }
 
-    private func didResolve(key: String, name: String, txt: [String: String], host: String?, generation: Int) {
-        guard self.generation == generation else { return }
+    private func didResolve(
+        key: String,
+        name: String,
+        txt: [String: String],
+        host: String?,
+        token: UUID,
+        generation: Int
+    ) {
+        guard self.generation == generation, attemptTokens[key] == token else { return }
         resolvers[key] = nil
         if let host, !host.isEmpty {
-            retryAfter[key] = nil
+            invalidateAttempt(key)
             resolvedByKey[key] = Self.device(name: name, host: host, txt: txt)
             log.info("Resolved \(name, privacy: .public) at \(host, privacy: .public)")
         } else {
-            retryAfter[key] = Date().addingTimeInterval(8)
+            retryAfter[key] = Date().addingTimeInterval(Self.resolveRetryDelay)
             log.info("Could not resolve \(name, privacy: .public); will retry")
+            scheduleRetry(key: key, name: name, token: token, generation: generation)
         }
         publish()
+    }
+
+    /// Browse results often stay stable after a failed resolve, so `browseResultsChangedHandler` will not call `apply` again.
+    private func scheduleRetry(key: String, name: String, token: UUID, generation: Int) {
+        retryTasks[key]?.cancel()
+        let delay = UInt64(Self.resolveRetryDelay * 1_000_000_000)
+        let task = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard let self, !Task.isCancelled else { return }
+            guard self.generation == generation, self.attemptTokens[key] == token else { return }
+            self.retryTasks[key] = nil
+            self.attemptTokens[key] = nil
+            self.retryAfter[key] = nil
+            self.log.info("Retrying resolve for \(name, privacy: .public)")
+            self.apply(results: self.lastResults, generation: generation)
+        }
+        retryTasks[key] = task
+    }
+
+    private func invalidateAttempt(_ key: String) {
+        attemptTokens[key] = nil
+        retryAfter[key] = nil
+        retryTasks[key]?.cancel()
+        retryTasks[key] = nil
+        resolvers[key]?.cancel()
+        resolvers[key] = nil
+    }
+
+    private nonisolated static func serviceKey(name: String, type: String, domain: String) -> String {
+        "\(name)\u{0}\(type)\u{0}\(domain)"
     }
 
     private func publish() {
